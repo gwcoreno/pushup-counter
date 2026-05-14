@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { AuthBar } from "@/components/AuthBar";
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next"
+
 
 export const metadata: Metadata = {
   title: "PushOff",
@@ -17,6 +19,7 @@ export default function RootLayout({
       <body className="font-sans antialiased min-h-screen bg-background text-foreground">
         <AuthBar />
         {children}
+        <Analytics/>
       </body>
     </html>
   );

@@ -7,6 +7,7 @@ import {
   NormalizedLandmark,
   PoseLandmarker,
 } from '@mediapipe/tasks-vision';
+import { saveWorkoutSession } from '@/app/actions/sessions';
 
 const MEDIAPIPE_VERSION = '0.10.35';
 const WASM_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`;
@@ -17,6 +18,16 @@ const DOWN_ANGLE = 90;
 const UP_ANGLE = 160;
 const SHALLOW_BEND = 110;
 const MIN_VISIBILITY = 0.5;
+
+/** MediaPipe pose indices: L shoulder/elbow/wrist, R shoulder/elbow/wrist */
+const L_SH = 11;
+const L_EL = 13;
+const L_WR = 15;
+const R_SH = 12;
+const R_EL = 14;
+const R_WR = 16;
+
+const POSE_LOG_INTERVAL_MS = 400;
 
 type Phase = 'up' | 'down';
 type Status = 'idle' | 'loading' | 'running' | 'error';
@@ -39,6 +50,60 @@ function visibleEnough(lm: NormalizedLandmark | undefined): lm is NormalizedLand
   return !!lm && (lm.visibility ?? 0) >= MIN_VISIBILITY;
 }
 
+function lmPoint(lm: NormalizedLandmark[] | undefined, i: number) {
+  const p = lm?.[i];
+  if (!p) return null;
+  return {
+    x: Number(p.x.toFixed(4)),
+    y: Number(p.y.toFixed(4)),
+    z: Number(p.z.toFixed(4)),
+    visibility: Number((p.visibility ?? 0).toFixed(3)),
+  };
+}
+
+/** `navigator.mediaDevices` is missing on non-secure origins (HTTP except localhost) and some in-app browsers. */
+function getUserMediaCompat(constraints: MediaStreamConstraints): Promise<MediaStream> {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('Camera is only available in the browser.'));
+  }
+  if (!window.isSecureContext) {
+    return Promise.reject(
+      new Error(
+        'Camera needs a secure page (HTTPS). Open this app with an https:// link (localhost is OK for local dev).',
+      ),
+    );
+  }
+
+  const modern = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
+  if (modern) {
+    return modern(constraints);
+  }
+
+  type LegacyGetUserMedia = (
+    c: MediaStreamConstraints,
+    ok: (s: MediaStream) => void,
+    err: (e: Error) => void,
+  ) => void;
+  const n = navigator as Navigator & {
+    getUserMedia?: LegacyGetUserMedia;
+    webkitGetUserMedia?: LegacyGetUserMedia;
+    mozGetUserMedia?: LegacyGetUserMedia;
+  };
+  const legacy =
+    n.getUserMedia?.bind(n) ?? n.webkitGetUserMedia?.bind(n) ?? n.mozGetUserMedia?.bind(n);
+  if (legacy) {
+    return new Promise((resolve, reject) => {
+      legacy(constraints, resolve, reject);
+    });
+  }
+
+  return Promise.reject(
+    new Error(
+      'Camera API is not available here. Try a normal browser (not an in-app web view), or update your browser.',
+    ),
+  );
+}
+
 export default function PushUpCounter() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -46,12 +111,20 @@ export default function PushUpCounter() {
   const rafRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>('up');
   const minAngleRef = useRef<number>(180);
+  const lastPoseLogAtRef = useRef(0);
+  const sessionStartIsoRef = useRef<string | null>(null);
+  const countRef = useRef(0);
 
   const [count, setCount] = useState(0);
   const [feedback, setFeedback] = useState('Get into push-up position');
   const [status, setStatus] = useState<Status>('idle');
   const [loadingMsg, setLoadingMsg] = useState('Loading…');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [sessionSaveHint, setSessionSaveHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    countRef.current = count;
+  }, [count]);
 
   const stopTracks = () => {
     const video = videoRef.current;
@@ -102,35 +175,92 @@ export default function PushUpCounter() {
         radius: 3,
       });
 
+      const leftOk =
+        visibleEnough(lm[L_SH]) && visibleEnough(lm[L_EL]) && visibleEnough(lm[L_WR]);
+      const rightOk =
+        visibleEnough(lm[R_SH]) && visibleEnough(lm[R_EL]) && visibleEnough(lm[R_WR]);
+
       const angles: number[] = [];
-      if (visibleEnough(lm[11]) && visibleEnough(lm[13]) && visibleEnough(lm[15])) {
-        angles.push(elbowAngle(lm[11], lm[13], lm[15]));
+      let leftAngle: number | null = null;
+      let rightAngle: number | null = null;
+      if (leftOk) {
+        leftAngle = elbowAngle(lm[L_SH], lm[L_EL], lm[L_WR]);
+        angles.push(leftAngle);
       }
-      if (visibleEnough(lm[12]) && visibleEnough(lm[14]) && visibleEnough(lm[16])) {
-        angles.push(elbowAngle(lm[12], lm[14], lm[16]));
+      if (rightOk) {
+        rightAngle = elbowAngle(lm[R_SH], lm[R_EL], lm[R_WR]);
+        angles.push(rightAngle);
       }
 
       if (angles.length > 0) {
         const avg = angles.reduce((s, n) => s + n, 0) / angles.length;
+        const phaseBefore = phaseRef.current;
         minAngleRef.current = Math.min(minAngleRef.current, avg);
 
+        let repDepthMin: number | undefined;
         if (phaseRef.current === 'up' && avg < DOWN_ANGLE) {
           phaseRef.current = 'down';
           setFeedback('Going down…');
         } else if (phaseRef.current === 'down' && avg > UP_ANGLE) {
+          repDepthMin = minAngleRef.current;
           phaseRef.current = 'up';
-          const deepEnough = minAngleRef.current < DOWN_ANGLE;
+          const deepEnough = repDepthMin < DOWN_ANGLE;
           setCount((c) => c + 1);
           setFeedback(deepEnough ? 'Good rep!' : 'Rep counted — try to go lower next time');
           minAngleRef.current = 180;
         } else if (phaseRef.current === 'down' && avg > SHALLOW_BEND && minAngleRef.current > DOWN_ANGLE) {
           setFeedback('Go lower');
         }
+
+        const phaseAfter = phaseRef.current;
+        const repJustCounted = phaseBefore === 'down' && phaseAfter === 'up';
+        const phaseEnteredDown = phaseBefore === 'up' && phaseAfter === 'down';
+        const now = performance.now();
+        const throttleOk = now - lastPoseLogAtRef.current >= POSE_LOG_INTERVAL_MS;
+        if (repJustCounted || phaseEnteredDown || throttleOk) {
+          lastPoseLogAtRef.current = now;
+          console.log('[pushup-pose]', {
+            event: repJustCounted
+              ? 'rep_counted'
+              : phaseEnteredDown
+                ? 'phase_down'
+                : 'tick',
+            phase: phaseAfter,
+            phaseBefore,
+            angles: { leftDeg: leftAngle, rightDeg: rightAngle, avgDeg: Number(avg.toFixed(1)) },
+            minAngleThisRep: repJustCounted
+              ? Number((repDepthMin ?? avg).toFixed(1))
+              : Number(minAngleRef.current.toFixed(1)),
+            thresholds: { DOWN_ANGLE, UP_ANGLE, SHALLOW_BEND, MIN_VISIBILITY },
+            visibilityOk: { leftArm: leftOk, rightArm: rightOk },
+            landmarks: {
+              left: { sh: lmPoint(lm, L_SH), el: lmPoint(lm, L_EL), wr: lmPoint(lm, L_WR) },
+              right: { sh: lmPoint(lm, R_SH), el: lmPoint(lm, R_EL), wr: lmPoint(lm, R_WR) },
+            },
+          });
+        }
       } else {
         setFeedback('Make sure your arms are visible');
+        const now = performance.now();
+        if (now - lastPoseLogAtRef.current >= POSE_LOG_INTERVAL_MS) {
+          lastPoseLogAtRef.current = now;
+          console.log('[pushup-pose]', {
+            event: 'arms_not_visible_enough',
+            thresholds: { MIN_VISIBILITY },
+            landmarks: {
+              left: { sh: lmPoint(lm, L_SH), el: lmPoint(lm, L_EL), wr: lmPoint(lm, L_WR) },
+              right: { sh: lmPoint(lm, R_SH), el: lmPoint(lm, R_EL), wr: lmPoint(lm, R_WR) },
+            },
+          });
+        }
       }
     } else {
       setFeedback('No pose detected — step into frame');
+      const now = performance.now();
+      if (now - lastPoseLogAtRef.current >= POSE_LOG_INTERVAL_MS) {
+        lastPoseLogAtRef.current = now;
+        console.log('[pushup-pose]', { event: 'no_pose', landmarksCount: result.landmarks.length });
+      }
     }
 
     rafRef.current = requestAnimationFrame(loop);
@@ -141,7 +271,7 @@ export default function PushUpCounter() {
     setStatus('loading');
     try {
       if (!landmarkerRef.current) {
-        setLoadingMsg('Loading pose model (~8MB)…');
+        setLoadingMsg('Loading pose model…');
         const vision = await FilesetResolver.forVisionTasks(WASM_URL);
         landmarkerRef.current = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
@@ -151,7 +281,7 @@ export default function PushUpCounter() {
       }
 
       setLoadingMsg('Requesting camera…');
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await getUserMediaCompat({
         video: { facingMode: 'user', width: 640, height: 480 },
         audio: false,
       });
@@ -174,6 +304,7 @@ export default function PushUpCounter() {
 
       phaseRef.current = 'up';
       minAngleRef.current = 180;
+      sessionStartIsoRef.current = new Date().toISOString();
       setStatus('running');
       rafRef.current = requestAnimationFrame(loop);
     } catch (err) {
@@ -185,14 +316,34 @@ export default function PushUpCounter() {
     }
   };
 
-  const stop = () => {
+  const stop = async () => {
+    const startIso = sessionStartIsoRef.current;
+    const hadWorkoutSession = startIso !== null;
+    const endIso = new Date().toISOString();
+    const repsAtStop = countRef.current;
+
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
     stopTracks();
+    sessionStartIsoRef.current = null;
     setStatus('idle');
     setFeedback('Get into push-up position');
+    setSessionSaveHint(null);
+
+    if (hadWorkoutSession && startIso) {
+      const result = await saveWorkoutSession({
+        startTimeIso: startIso,
+        endTimeIso: endIso,
+        reps: repsAtStop,
+      });
+      if (result.ok) {
+        setSessionSaveHint('Workout saved to your account.');
+      } else if (result.error !== 'Not signed in.') {
+        setSessionSaveHint(`Could not save workout: ${result.error}`);
+      }
+    }
   };
 
   const reset = () => {
@@ -256,7 +407,8 @@ export default function PushUpCounter() {
         {status === 'running' && (
           <>
             <button
-              onClick={stop}
+              type="button"
+              onClick={() => void stop()}
               className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-6 rounded-lg"
             >
               Stop
@@ -275,6 +427,9 @@ export default function PushUpCounter() {
         <p className="text-red-500 text-sm max-w-[640px] text-center">
           {errorMsg}
         </p>
+      )}
+      {sessionSaveHint && (
+        <p className="text-green-600 text-sm max-w-[640px] text-center">{sessionSaveHint}</p>
       )}
     </div>
   );

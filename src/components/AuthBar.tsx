@@ -15,9 +15,14 @@ export async function AuthBar() {
           Push-Up Counter
         </Link>
         {user && (
-          <Link href="/sessions" className="text-muted hover:underline">
-            My sessions
-          </Link>
+          <>
+            <Link href="/battle" className="text-muted hover:underline">
+              1v1 battle
+            </Link>
+            <Link href="/sessions" className="text-muted hover:underline">
+              My sessions
+            </Link>
+          </>
         )}
       </nav>
       <div className="flex items-center gap-3 text-sm">

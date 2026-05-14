@@ -104,7 +104,27 @@ function getUserMediaCompat(constraints: MediaStreamConstraints): Promise<MediaS
   );
 }
 
-export default function PushUpCounter() {
+export type PushUpCounterProps = {
+  /** When set, use this stream instead of opening a new camera (e.g. 1v1 battle). */
+  sharedVideoStream?: MediaStream | null;
+  /** When false, pose is drawn but reps are not counted (pre-battle warmup). */
+  repCountingEnabled?: boolean;
+  /** Solo saves sessions on stop; battle skips that. */
+  battleMode?: boolean;
+  /** Increment to auto-run start() once a shared stream is available (battle). */
+  countStartSignal?: number;
+  showControls?: boolean;
+  onRepCountChange?: (count: number) => void;
+};
+
+export default function PushUpCounter({
+  sharedVideoStream = null,
+  repCountingEnabled = true,
+  battleMode = false,
+  countStartSignal = 0,
+  showControls = true,
+  onRepCountChange,
+}: PushUpCounterProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const landmarkerRef = useRef<PoseLandmarker | null>(null);
@@ -114,6 +134,10 @@ export default function PushUpCounter() {
   const lastPoseLogAtRef = useRef(0);
   const sessionStartIsoRef = useRef<string | null>(null);
   const countRef = useRef(0);
+  const sharedStreamRef = useRef<MediaStream | null>(null);
+  const repCountingEnabledRef = useRef(repCountingEnabled);
+  const ownsCameraStreamRef = useRef(true);
+  const prevRepCountingEnabledRef = useRef(true);
 
   const [count, setCount] = useState(0);
   const [feedback, setFeedback] = useState('Get into push-up position');
@@ -123,15 +147,36 @@ export default function PushUpCounter() {
   const [sessionSaveHint, setSessionSaveHint] = useState<string | null>(null);
 
   useEffect(() => {
+    sharedStreamRef.current = sharedVideoStream;
+    ownsCameraStreamRef.current = !sharedVideoStream;
+  }, [sharedVideoStream]);
+
+  useEffect(() => {
+    repCountingEnabledRef.current = repCountingEnabled;
+    if (repCountingEnabled && !prevRepCountingEnabledRef.current) {
+      setCount(0);
+      phaseRef.current = 'up';
+      minAngleRef.current = 180;
+      setFeedback('Go!');
+    }
+    prevRepCountingEnabledRef.current = repCountingEnabled;
+  }, [repCountingEnabled]);
+
+  useEffect(() => {
     countRef.current = count;
   }, [count]);
 
+  useEffect(() => {
+    onRepCountChange?.(count);
+  }, [count, onRepCountChange]);
+
   const stopTracks = () => {
     const video = videoRef.current;
-    if (video?.srcObject) {
+    if (!video?.srcObject) return;
+    if (ownsCameraStreamRef.current) {
       (video.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
-      video.srcObject = null;
     }
+    video.srcObject = null;
   };
 
   useEffect(() => {
@@ -194,50 +239,52 @@ export default function PushUpCounter() {
 
       if (angles.length > 0) {
         const avg = angles.reduce((s, n) => s + n, 0) / angles.length;
-        const phaseBefore = phaseRef.current;
-        minAngleRef.current = Math.min(minAngleRef.current, avg);
+        if (repCountingEnabledRef.current) {
+          const phaseBefore = phaseRef.current;
+          minAngleRef.current = Math.min(minAngleRef.current, avg);
 
-        let repDepthMin: number | undefined;
-        if (phaseRef.current === 'up' && avg < DOWN_ANGLE) {
-          phaseRef.current = 'down';
-          setFeedback('Going down…');
-        } else if (phaseRef.current === 'down' && avg > UP_ANGLE) {
-          repDepthMin = minAngleRef.current;
-          phaseRef.current = 'up';
-          const deepEnough = repDepthMin < DOWN_ANGLE;
-          setCount((c) => c + 1);
-          setFeedback(deepEnough ? 'Good rep!' : 'Rep counted — try to go lower next time');
-          minAngleRef.current = 180;
-        } else if (phaseRef.current === 'down' && avg > SHALLOW_BEND && minAngleRef.current > DOWN_ANGLE) {
-          setFeedback('Go lower');
-        }
+          let repDepthMin: number | undefined;
+          if (phaseRef.current === 'up' && avg < DOWN_ANGLE) {
+            phaseRef.current = 'down';
+            setFeedback('Going down…');
+          } else if (phaseRef.current === 'down' && avg > UP_ANGLE) {
+            repDepthMin = minAngleRef.current;
+            phaseRef.current = 'up';
+            const deepEnough = repDepthMin < DOWN_ANGLE;
+            setCount((c) => c + 1);
+            setFeedback(deepEnough ? 'Good rep!' : 'Rep counted — try to go lower next time');
+            minAngleRef.current = 180;
+          } else if (phaseRef.current === 'down' && avg > SHALLOW_BEND && minAngleRef.current > DOWN_ANGLE) {
+            setFeedback('Go lower');
+          }
 
-        const phaseAfter = phaseRef.current;
-        const repJustCounted = phaseBefore === 'down' && phaseAfter === 'up';
-        const phaseEnteredDown = phaseBefore === 'up' && phaseAfter === 'down';
-        const now = performance.now();
-        const throttleOk = now - lastPoseLogAtRef.current >= POSE_LOG_INTERVAL_MS;
-        if (repJustCounted || phaseEnteredDown || throttleOk) {
-          lastPoseLogAtRef.current = now;
-          console.log('[pushup-pose]', {
-            event: repJustCounted
-              ? 'rep_counted'
-              : phaseEnteredDown
-                ? 'phase_down'
-                : 'tick',
-            phase: phaseAfter,
-            phaseBefore,
-            angles: { leftDeg: leftAngle, rightDeg: rightAngle, avgDeg: Number(avg.toFixed(1)) },
-            minAngleThisRep: repJustCounted
-              ? Number((repDepthMin ?? avg).toFixed(1))
-              : Number(minAngleRef.current.toFixed(1)),
-            thresholds: { DOWN_ANGLE, UP_ANGLE, SHALLOW_BEND, MIN_VISIBILITY },
-            visibilityOk: { leftArm: leftOk, rightArm: rightOk },
-            landmarks: {
-              left: { sh: lmPoint(lm, L_SH), el: lmPoint(lm, L_EL), wr: lmPoint(lm, L_WR) },
-              right: { sh: lmPoint(lm, R_SH), el: lmPoint(lm, R_EL), wr: lmPoint(lm, R_WR) },
-            },
-          });
+          const phaseAfter = phaseRef.current;
+          const repJustCounted = phaseBefore === 'down' && phaseAfter === 'up';
+          const phaseEnteredDown = phaseBefore === 'up' && phaseAfter === 'down';
+          const now = performance.now();
+          const throttleOk = now - lastPoseLogAtRef.current >= POSE_LOG_INTERVAL_MS;
+          if (repJustCounted || phaseEnteredDown || throttleOk) {
+            lastPoseLogAtRef.current = now;
+            console.log('[pushup-pose]', {
+              event: repJustCounted
+                ? 'rep_counted'
+                : phaseEnteredDown
+                  ? 'phase_down'
+                  : 'tick',
+              phase: phaseAfter,
+              phaseBefore,
+              angles: { leftDeg: leftAngle, rightDeg: rightAngle, avgDeg: Number(avg.toFixed(1)) },
+              minAngleThisRep: repJustCounted
+                ? Number((repDepthMin ?? avg).toFixed(1))
+                : Number(minAngleRef.current.toFixed(1)),
+              thresholds: { DOWN_ANGLE, UP_ANGLE, SHALLOW_BEND, MIN_VISIBILITY },
+              visibilityOk: { leftArm: leftOk, rightArm: rightOk },
+              landmarks: {
+                left: { sh: lmPoint(lm, L_SH), el: lmPoint(lm, L_EL), wr: lmPoint(lm, L_WR) },
+                right: { sh: lmPoint(lm, R_SH), el: lmPoint(lm, R_EL), wr: lmPoint(lm, R_WR) },
+              },
+            });
+          }
         }
       } else {
         setFeedback('Make sure your arms are visible');
@@ -280,11 +327,13 @@ export default function PushUpCounter() {
         });
       }
 
-      setLoadingMsg('Requesting camera…');
-      const stream = await getUserMediaCompat({
-        video: { facingMode: 'user', width: 640, height: 480 },
-        audio: false,
-      });
+      setLoadingMsg(sharedStreamRef.current ? 'Starting camera…' : 'Requesting camera…');
+      const stream =
+        sharedStreamRef.current ??
+        (await getUserMediaCompat({
+          video: { facingMode: 'user', width: 640, height: 480 },
+          audio: false,
+        }));
 
       const video = videoRef.current;
       if (!video) throw new Error('Video element not mounted');
@@ -304,7 +353,11 @@ export default function PushUpCounter() {
 
       phaseRef.current = 'up';
       minAngleRef.current = 180;
-      sessionStartIsoRef.current = new Date().toISOString();
+      if (!battleMode) {
+        sessionStartIsoRef.current = new Date().toISOString();
+      } else {
+        sessionStartIsoRef.current = null;
+      }
       setStatus('running');
       rafRef.current = requestAnimationFrame(loop);
     } catch (err) {
@@ -315,6 +368,12 @@ export default function PushUpCounter() {
       setStatus('error');
     }
   };
+
+  useEffect(() => {
+    if (!countStartSignal || !sharedStreamRef.current) return;
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run when parent signals with stream
+  }, [countStartSignal]);
 
   const stop = async () => {
     const startIso = sessionStartIsoRef.current;
@@ -332,7 +391,7 @@ export default function PushUpCounter() {
     setFeedback('Get into push-up position');
     setSessionSaveHint(null);
 
-    if (hadWorkoutSession && startIso) {
+    if (hadWorkoutSession && startIso && !battleMode) {
       const result = await saveWorkoutSession({
         startTimeIso: startIso,
         endTimeIso: endIso,
@@ -382,11 +441,12 @@ export default function PushUpCounter() {
         )}
         {status === 'idle' && (
           <div className="absolute inset-0 flex items-center justify-center text-white/70 text-sm">
-            Click Start to begin
+            {showControls ? 'Click Start to begin' : 'Preparing camera…'}
           </div>
         )}
       </div>
 
+      {showControls && (
       <div className="flex gap-3">
         {status === 'idle' || status === 'error' ? (
           <button
@@ -422,6 +482,7 @@ export default function PushUpCounter() {
           </>
         )}
       </div>
+      )}
 
       {errorMsg && (
         <p className="text-red-500 text-sm max-w-[640px] text-center">

@@ -3,7 +3,7 @@ import { AuthBar } from "@/components/AuthBar";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Push-Up Counter",
+  title: "PushOff",
   description: "Count push-ups in real time with on-device pose estimation.",
 };
 

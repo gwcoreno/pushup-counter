@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { Button } from '@/components/ui/button';
 import { createServerSupabase } from '@/utils/supabase/server';
 
 export const dynamic = 'force-dynamic';
@@ -32,9 +33,9 @@ export default async function SessionsPage() {
     <main className="min-h-screen p-6 max-w-3xl mx-auto space-y-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Workout sessions</h1>
-        <Link href="/" className="text-sm text-blue-600 hover:underline">
-          ← Counter
-        </Link>
+        <Button variant="outline" size="sm" asChild>
+          <Link href="/">← Counter</Link>
+        </Button>
       </div>
 
       {error && (
@@ -57,6 +58,7 @@ export default async function SessionsPage() {
               <tr className="border-b border-border bg-surface text-left">
                 <th className="p-3 font-medium">Start</th>
                 <th className="p-3 font-medium">End</th>
+                <th className="p-3 font-medium whitespace-nowrap">Duration</th>
                 <th className="p-3 font-medium text-right">Reps</th>
               </tr>
             </thead>
@@ -65,6 +67,9 @@ export default async function SessionsPage() {
                 <tr key={s.id} className="border-b border-border last:border-0">
                   <td className="p-3 whitespace-nowrap">{formatLocal(s.start_time)}</td>
                   <td className="p-3 whitespace-nowrap">{formatLocal(s.end_time)}</td>
+                  <td className="p-3 whitespace-nowrap tabular-nums text-muted">
+                    {formatDuration(s.start_time, s.end_time)}
+                  </td>
                   <td className="p-3 text-right tabular-nums">{s.reps}</td>
                 </tr>
               ))}
@@ -82,4 +87,23 @@ function formatLocal(iso: string) {
   } catch {
     return iso;
   }
+}
+
+/** Elapsed time from start to end (e.g. `3m 12s`, `1h 5m`). */
+function formatDuration(startIso: string, endIso: string) {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return '—';
+
+  const totalSec = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  if (s > 0 || parts.length === 0) parts.push(`${s}s`);
+
+  return parts.join(' ');
 }

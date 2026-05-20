@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { use, useEffect, useState } from 'react';
 import { battleGetMatch, type MatchRow } from '@/app/actions/battle';
 import { BattleArena } from '@/components/battle/BattleArena';
-import { ensureAnonSession } from '@/lib/battle/ensure-anon-session';
+import { getExistingBattleUser } from '@/lib/battle/guest-session';
 
 export function BattleMatchClient({
   paramsPromise,
@@ -20,8 +20,12 @@ export function BattleMatchClient({
     let cancelled = false;
     void (async () => {
       try {
-        const user = await ensureAnonSession();
+        const user = await getExistingBattleUser();
         if (cancelled) return;
+        if (!user) {
+          setState('error');
+          return;
+        }
         const m = await battleGetMatch(matchId);
         if (cancelled) return;
         if (!m || (user.id !== m.player1_id && user.id !== m.player2_id)) {
@@ -52,8 +56,8 @@ export function BattleMatchClient({
     return (
       <main className="min-h-screen flex flex-col items-center justify-center p-6 gap-4">
         <p className="text-muted text-center max-w-sm">
-          This match is unavailable, or guest sign-in failed. Enable <strong>Anonymous sign-ins</strong>{' '}
-          in Supabase (Authentication → Providers) if you have not already.
+          This match is unavailable, or you are not signed in. Start from the lobby and enter your
+          name to create a guest session.
         </p>
         <Link href="/battle" className="text-blue-600 underline text-sm">
           Back to matchmaking

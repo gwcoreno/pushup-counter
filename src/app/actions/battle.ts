@@ -93,3 +93,12 @@ export async function battleFinalize(matchId: string): Promise<MatchRow | null> 
   if (o.error) return null;
   return asMatch(data);
 }
+
+export async function battleForfeit(matchId: string): Promise<MatchRow | null> {
+  const supabase = await createServerSupabase();
+  const { data, error } = await supabase.rpc('forfeit_match', { m_id: matchId });
+  if (error || !data) return null;
+  const o = data as Record<string, unknown>;
+  if (o.error) return null;
+  return asMatch(data);
+}

@@ -1,10 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   battleFinalize,
+  battleForfeit,
   battleGetMatch,
   battleMarkReady,
   battleUpdateReps,
@@ -12,6 +12,7 @@ import {
 } from '@/app/actions/battle';
 import PushUpCounter from '@/components/PushUpCounter';
 import { createClient } from '@/utils/supabase/client';
+import { Button } from '../ui/button';
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -48,8 +49,11 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [result, setResult] = useState<string | null>(null);
   const [readyBusy, setReadyBusy] = useState(false);
+  const [quitBusy, setQuitBusy] = useState(false);
   const [remoteLive, setRemoteLive] = useState(false);
   const finalizedRef = useRef(false);
+  const quitIntentRef = useRef(false);
+  const matchStatusRef = useRef(match.status);
 
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -66,9 +70,23 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
 
   const refreshMatch = useCallback(async () => {
     const m = await battleGetMatch(matchId);
-    if (m) setMatch(m);
+    if (m) {
+      matchStatusRef.current = m.status;
+      setMatch(m);
+    }
     return m;
   }, [matchId]);
+
+  const applyMatchOutcome = useCallback((m: MatchRow) => {
+    const endedEarly = m.ends_at ? Date.now() < new Date(m.ends_at).getTime() : m.status === 'completed';
+    if (m.winner_id === null) {
+      setResult("Time's up — tie game.");
+    } else if (m.winner_id === userId) {
+      setResult(endedEarly ? 'You win! Opponent quit.' : 'You win!');
+    } else {
+      setResult(endedEarly ? 'Opponent wins. You quit.' : 'Opponent wins.');
+    }
+  }, [userId]);
 
   useEffect(() => {
     const id = setInterval(() => setNowTick(Date.now()), 250);
@@ -83,6 +101,40 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
   }, [refreshMatch]);
 
   useEffect(() => {
+    matchStatusRef.current = match.status;
+  }, [match.status]);
+
+  useEffect(() => {
+    if (match.status === 'completed' && !result) {
+      finalizedRef.current = true;
+      matchStatusRef.current = 'completed';
+      applyMatchOutcome(match);
+    }
+  }, [applyMatchOutcome, match, result]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`match-row:${matchId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'matches', filter: `id=eq.${matchId}` },
+        (payload) => {
+          const row = payload.new as Record<string, unknown>;
+          if (typeof row.id !== 'string' || typeof row.status !== 'string') return;
+          const m = row as unknown as MatchRow;
+          matchStatusRef.current = m.status;
+          setMatch(m);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [matchId]);
+
+  useEffect(() => {
     if (match.status !== 'live' || !match.starts_at || !match.ends_at) return;
     const startMs = new Date(match.starts_at).getTime();
     const endMs = new Date(match.ends_at).getTime();
@@ -95,17 +147,22 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
         const finalized = await battleFinalize(matchId);
         if (finalized) {
           setMatch(finalized);
-          if (finalized.winner_id === null) {
-            setResult("Time's up — tie game.");
-          } else if (finalized.winner_id === userId) {
-            setResult('You win!');
-          } else {
-            setResult('Opponent wins.');
-          }
+          applyMatchOutcome(finalized);
         }
       })();
     }
-  }, [match, matchId, nowTick, repCountingEnabled, userId]);
+  }, [applyMatchOutcome, match, matchId, nowTick, repCountingEnabled]);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      if (quitIntentRef.current || finalizedRef.current) return;
+      const status = matchStatusRef.current;
+      if (status !== 'pairing' && status !== 'live') return;
+      void fetch(`/api/battle/${matchId}/forfeit`, { method: 'POST', keepalive: true });
+    };
+    window.addEventListener('pagehide', onPageHide);
+    return () => window.removeEventListener('pagehide', onPageHide);
+  }, [matchId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -234,6 +291,18 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
     }
   };
 
+  const onQuit = async () => {
+    quitIntentRef.current = true;
+    finalizedRef.current = true;
+    setQuitBusy(true);
+    try {
+      await battleForfeit(matchId);
+    } finally {
+      setQuitBusy(false);
+      router.push('/battle');
+    }
+  };
+
   const startsAtMs = match.starts_at ? new Date(match.starts_at).getTime() : null;
   const endsAtMs = match.ends_at ? new Date(match.ends_at).getTime() : null;
   const preCountdown =
@@ -250,9 +319,15 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
   return (
     <main className="min-h-screen p-4 md:p-6 max-w-5xl mx-auto space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link href="/battle" className="text-sm text-blue-600 hover:underline">
-          ← Leave match flow
-        </Link>
+        <Button
+          variant="outline"
+          size="sm"
+          type="button"
+          disabled={quitBusy || match.status === 'completed'}
+          onClick={() => void onQuit()}
+        >
+          {quitBusy ? 'Quitting…' : 'Quit'}
+        </Button>
         <div className="text-sm text-muted">
           WebRTC: <span className="text-foreground">{pcState}</span>
         </div>
@@ -309,7 +384,11 @@ export function BattleArena({ matchId, userId, initialMatch, isOfferer }: Battle
           <p className="text-lg font-semibold">{result}</p>
           <button
             type="button"
-            onClick={() => router.push('/battle')}
+            onClick={() => {
+              quitIntentRef.current = true;
+              finalizedRef.current = true;
+              router.push('/battle');
+            }}
             className="bg-blue-600 text-white rounded-lg px-4 py-2 text-sm"
           >
             Find another match

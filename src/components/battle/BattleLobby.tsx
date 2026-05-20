@@ -7,6 +7,7 @@ import {
   battleJoinQueue,
   battleLeaveQueue,
 } from '@/app/actions/battle';
+import { ensureAnonSession } from '@/lib/battle/ensure-anon-session';
 
 export function BattleLobby() {
   const router = useRouter();
@@ -28,6 +29,12 @@ export function BattleLobby() {
     };
   }, []);
 
+  useEffect(() => {
+    void ensureAnonSession().catch(() => {
+      /* optional warm-up; Find opponent will retry */
+    });
+  }, []);
+
   const goToMatch = useCallback(
     (matchId: string) => {
       clearPoll();
@@ -41,6 +48,7 @@ export function BattleLobby() {
     setError(null);
     setSearching(true);
     try {
+      await ensureAnonSession();
       const first = await battleJoinQueue();
       if (!first.ok) {
         setError(first.error);
@@ -74,9 +82,10 @@ export function BattleLobby() {
     <main className="min-h-screen flex flex-col items-center justify-center p-6 gap-6 max-w-md mx-auto text-center">
       <h1 className="text-2xl font-bold text-foreground">1v1 battle</h1>
       <p className="text-sm text-muted">
-        You will be paired with another signed-in player. When both are ready, you get a{' '}
-        <strong>60 second</strong> window — most push-up reps wins. Peer video uses WebRTC over
-        Supabase Realtime (STUN only; some networks need TURN for production).
+        You will be paired with another player (no account required). When both tap{' '}
+        <strong>Ready</strong>, you get a <strong>60 second</strong> window — most push-up reps wins.
+        Peer video uses WebRTC over Supabase Realtime (STUN only; some networks need TURN for
+        production).
       </p>
       {!searching ? (
         <button

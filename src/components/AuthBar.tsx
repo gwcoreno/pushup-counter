@@ -14,22 +14,20 @@ export async function AuthBar() {
         <Link href="/" className="font-medium hover:underline">
           Push-Up Counter
         </Link>
+        <Link href="/battle" className="text-muted hover:underline">
+          1v1 battle
+        </Link>
         {user && (
-          <>
-            <Link href="/battle" className="text-muted hover:underline">
-              1v1 battle
-            </Link>
-            <Link href="/sessions" className="text-muted hover:underline">
-              My sessions
-            </Link>
-          </>
+          <Link href="/sessions" className="text-muted hover:underline">
+            My sessions
+          </Link>
         )}
       </nav>
       <div className="flex items-center gap-3 text-sm">
         {user ? (
           <>
             <span className="text-muted truncate max-w-[200px]" title={user.email ?? ''}>
-              {user.email}
+              {user.email ?? (user.is_anonymous ? 'Guest' : 'Account')}
             </span>
             <form action={signOut}>
               <button

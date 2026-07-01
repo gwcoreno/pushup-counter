@@ -25,10 +25,10 @@ export async function AuthBar() {
     <header className="w-full border-b border-border px-4 py-3 flex items-center justify-between gap-4 max-w-3xl mx-auto">
       <nav className="flex items-center gap-4 text-sm">
         <Link href="/" className="font-medium hover:underline">
-          Push-Up Counter
+          Push-Off
         </Link>
         <Link href="/battle" className="text-muted hover:underline">
-          1v1 battle
+           Arena
         </Link>
         {user && (
           <>

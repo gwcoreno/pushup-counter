@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PushOff (Push-Up Counter)
 
-## Getting Started
+Next.js app with Supabase auth, workout sessions, and 1v1 battles.
 
-First, run the development server:
+## Prerequisites
+
+- [Node.js](https://nodejs.org/) 20+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (runs Supabase locally)
+- [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started): `brew install supabase/tap/supabase`
+
+## Local Supabase (Docker)
+
+Supabase runs in Docker via the CLI. Migrations in `supabase/migrations/` are applied on start.
 
 ```bash
+# 1. Start local Supabase (Postgres, Auth, API, Studio, etc.)
+npm run supabase:start
+# Writes `.env.development.local` with keys from the running stack.
+
+# 2. Run the Next.js dev server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+If you previously used a **hosted** Supabase project, remove or rename `.env.local` so it does not override local settings.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Useful commands:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command | Description |
+|---------|-------------|
+| `npm run supabase:status` | URLs and keys for the running stack |
+| `npm run supabase:env` | Sync `.env.development.local` from `supabase status` |
+| `npm run supabase:stop` | Stop Docker containers |
+| `npm run supabase:reset` | Re-run migrations + seed |
+| `npm run supabase:studio` | Open Supabase Studio (`http://127.0.0.1:54323`) |
 
-## Learn More
+**Local endpoints**
 
-To learn more about Next.js, take a look at the following resources:
+- API (app connects here): `http://127.0.0.1:54321`
+- Studio: `http://127.0.0.1:54323`
+- Inbucket (test emails): `http://127.0.0.1:54324`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Environment variables
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Development defaults live in **`.env.development`**. After `npm run supabase:start`, **`.env.development.local`** (gitignored) is generated with keys from your running Docker stack and takes precedence in `npm run dev`.
 
-## Deploy on Vercel
+To use a **hosted** Supabase project while developing, create **`.env.local`** (gitignored) with your remote URL and anon key — it overrides `.env.development`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Copy `.env.example` as a reference for production / Vercel.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Auth settings (local)
+
+`supabase/config.toml` enables:
+
+- Anonymous sign-ins (battle guests)
+- Manual linking (guest → email on same user id)
+- Email sign-up without confirmation
+
+## Production
+
+Deploy to Vercel (or similar) and set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to your hosted project. Apply migrations with `supabase db push` against the linked remote.
+
+## Tests
+
+```bash
+npm test
+```
+
+Integration tests use `SUPABASE_SERVICE_ROLE_KEY` from `.env.development` when local Supabase is running.

@@ -8,7 +8,13 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "supabase:start": "supabase start && node scripts/sync-local-env.mjs",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "supabase:env": "node scripts/sync-local-env.mjs",
+    "supabase:reset": "supabase db reset",
+    "supabase:studio": "open http://127.0.0.1:54323 || xdg-open http://127.0.0.1:54323"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",

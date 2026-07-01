@@ -34,7 +34,7 @@ export default async function SessionsPage() {
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Workout sessions</h1>
         <Button variant="outline" size="sm" asChild>
-          <Link href="/">← Counter</Link>
+          <Link href="/">Home</Link>
         </Button>
       </div>
 

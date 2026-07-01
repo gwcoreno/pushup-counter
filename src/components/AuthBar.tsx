@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { createServerSupabase } from '@/utils/supabase/server';
 import { signOut } from '@/app/actions/auth';
+import { resolveDisplayName } from '@/lib/battle/display-name';
+import { createServerSupabase } from '@/utils/supabase/server';
 
 export async function AuthBar() {
   const supabase = await createServerSupabase();
@@ -8,24 +9,45 @@ export async function AuthBar() {
     data: { user },
   } = await supabase.auth.getUser();
 
+  let headerLabel = 'Account';
+  if (user) {
+    const { data: profile } = await supabase
+      .from('users')
+      .select('display_name')
+      .eq('id', user.id)
+      .maybeSingle();
+    headerLabel =
+      resolveDisplayName(user, profile?.display_name, user.email) ??
+      (user.is_anonymous ? 'Guest' : 'Account');
+  }
+
   return (
     <header className="w-full border-b border-border px-4 py-3 flex items-center justify-between gap-4 max-w-3xl mx-auto">
       <nav className="flex items-center gap-4 text-sm">
         <Link href="/" className="font-medium hover:underline">
-          Push-Up Counter
+          Push-Off
+        </Link>
+        <Link href="/battle" className="text-muted hover:underline">
+           Arena
         </Link>
         {user && (
-          <Link href="/sessions" className="text-muted hover:underline">
-            My sessions
-          </Link>
+          <>
+            <Link href="/sessions" className="text-muted hover:underline">
+              My sessions
+            </Link>
+          </>
         )}
       </nav>
       <div className="flex items-center gap-3 text-sm">
         {user ? (
           <>
-            <span className="text-muted truncate max-w-[200px]" title={user.email ?? ''}>
-              {user.email}
-            </span>
+            <Link
+              href="/profile"
+              className="text-muted truncate max-w-[200px] hover:underline"
+              title={headerLabel}
+            >
+              {headerLabel}
+            </Link>
             <form action={signOut}>
               <button
                 type="submit"
